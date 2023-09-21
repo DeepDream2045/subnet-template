@@ -69,7 +69,9 @@ class Dummy( bt.Synapse ):
     dummy_model_path: str
 
     # Optional request output, filled by recieving axon.
-    dummy_output: typing.List[torch.FloatTensor]
+    # torch_str = "torch.FloatTensor"
+    # dummy_output: typing.Optional[typing.List[torch_str]] = None,
+    dummy_output: typing.Optional[typing.List[bt.Tensor]] = None,
     # dummy_output: torch.Tensor
     # END ADD
 

@@ -203,10 +203,10 @@ def main( config ):
         loss.backward()
         grads = [param.grad for param in model.parameters()]
 
-        # synapse.dummy_output = []
-        # for grad in grads:
-        #     synapse.dummy_output.append(grad.numpy())
-        synapse.dummy_output = [np.array(1), np.array(2)]
+        synapse.dummy_output = []
+        for grad in grads:
+            synapse.dummy_output.append(grad.numpy())
+        synapse.dummy_output = [bt.Tensor(0), bt.Tensor(1)]
         # synapse.dummy_output = grads
 
 
