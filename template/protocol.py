@@ -53,7 +53,7 @@ class Dummy( bt.Synapse ):
     """
 
     # Required request input, filled by sending dendrite caller.
-    dummy_input: int
+    dummy_input: str
 
     # TODO : ADD
     # Reward score assessed by the validator, filled by sending dendrite caller.
@@ -70,8 +70,9 @@ class Dummy( bt.Synapse ):
 
     # Optional request output, filled by recieving axon.
     # torch_str = "torch.FloatTensor"
-    # dummy_output: typing.Optional[typing.List[torch_str]] = None,
-    dummy_output: typing.Optional[typing.List[bt.Tensor]] = None,
+    # dummy_output: typing.Optional[typing.List[torch_str]] = None
+    # dummy_output: typing.Optional[typing.List[bt.Tensor]] = None
+    dummy_output: typing.Optional[str] = None
     # dummy_output: torch.Tensor
     # END ADD
 
