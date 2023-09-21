@@ -103,25 +103,52 @@ def main( config ):
         # Each miner gets a unique identity (UID) in the network for differentiation.
         my_subnet_uid = metagraph.hotkeys.index(wallet.hotkey.ss58_address)
         bt.logging.info(f"Running validator on uid: {my_subnet_uid}")
+        # ADD : set validators permit to True
+        metagraph.validator_permit[my_subnet_uid] = True
 
     # Step 6: Set up initial scoring weights for validation
     bt.logging.info("Building validation weights.")
     alpha = 0.9
-    scores = torch.ones_like(metagraph.S, dtype=torch.float32)
-    bt.logging.info(f"Weights: {scores}")
+
+    # ADD define two scores; reliance_scores and capacity_scores
+    # reliance_scores shows how correctly each miner is computing.
+    # capacity_scores shows how much data each miner can handle at the same time.
+    # validators and other miners who return None will gradually have the reliance_score of 0.
+    reliance_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
+    capacity_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
+
+    bt.logging.info(f"Reliance weights of miners: {reliance_scores}")
 
     # Step 7: The Main Validation Loop
     bt.logging.info("Starting validator loop.")
     step = 0
+
+    # TODO ADD
+    # Define the model and model checkpoint path.
+    from mnist_train import Net
+    model = Net().to('cpu')
+    optimizer = torch.optim.Adadelta(model.parameters(), lr=0.1)
+
+    model_ckpt_path = '/home/ubuntu/subnet-template/model.pt'
+    torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()}, model_ckpt_path)
+    # END ADD
+
     while True:
         try:
             # TODO(developer): Define how the validator selects a miner to query, how often, etc.
             # Broadcast a query to all miners on the network.
+            # SHOULD separate the input according to capacity_scores for each axon.
+
             responses = dendrite.query(
                 # Send the query to all axons in the network.
                 metagraph.axons,
                 # Construct a dummy query.
-                template.protocol.Dummy( dummy_input = step ), # Construct a dummy query.
+                template.protocol.Dummy(
+                                        dummy_input = step,
+                                        dummy_score = 1.0,
+                                        # dummy_model = model,
+                                        dummy_update=True,
+                                        dummy_model_path = model_ckpt_path ),
                 # All responses have the deserialize function called on them before returning.
                 deserialize = True, 
             )
@@ -129,26 +156,54 @@ def main( config ):
             # Log the results for monitoring purposes.
             bt.logging.info(f"Received dummy responses: {responses}")
 
-            # TODO(developer): Define how the validator scores responses.
-            # Adjust the scores based on responses from miners.
+            # # TODO(developer): Define how the validator scores responses.
+            # # ORIGIN
+            # # Adjust the scores based on responses from miners.
+            # for i, resp_i in enumerate(responses):
+            #     # Initialize the score for the current miner's response.
+            #     score = 0
+            #
+            #     # Check if the miner has provided the correct response by doubling the dummy input.
+            #     # If correct, set their score for this round to 1.
+            #     if resp_i == step * 2:
+            #         score = 1
+            #
+            #     # Update the global score of the miner.
+            #     # This score contributes to the miner's weight in the network.
+            #     # A higher weight means that the miner has been consistently responding correctly.
+            #     scores[i] = alpha * scores[i] + (1 - alpha) * score
+
+            # TODO : ADD
+            import numpy as np
+            # responses_np = np.array(responses)
+            # center = np.mean(responses_np[responses_np!=np.array(None)])
+            # Calculate the center of the result using reliance scores.
+            center = torch.Tensor()
+            total_score = 1e-10
             for i, resp_i in enumerate(responses):
-                # Initialize the score for the current miner's response.
-                score = 0
+                if resp_i == None:
+                    score = 0
+                else:
+                    center = torch.cat((center, reliance_scores[i] * resp_i), 0)
+                    total_score += reliance_scores[i]
+            center = torch.sum(center, 0) / total_score
+            # Rescore the reliance_scores using the distance from the center to the responses.
+            for i, resp_i in enumerate(responses):
+                if resp_i == None:
+                    score = 0
+                else:
+                    score = 1 - (abs(center - resp_i) / center)
+                reliance_scores[i] = alpha * reliance_scores[i] + (1 - alpha) * score
 
-                # Check if the miner has provided the correct response by doubling the dummy input.
-                # If correct, set their score for this round to 1.
-                if resp_i == step * 2:
-                    score = 1
-
-                # Update the global score of the miner.
-                # This score contributes to the miner's weight in the network.
-                # A higher weight means that the miner has been consistently responding correctly.
-                scores[i] = alpha * scores[i] + (1 - alpha) * score
+            # Normalize the reliance_scores to avoid the shrink of reliance_scores.
+            reliance_scores = reliance_scores / torch.max(reliance_scores)
+            bt.logging.info(f"Reliance scores: {reliance_scores}")
+            # END ADD
 
             # Periodically update the weights on the Bittensor blockchain.
             if (step + 1) % 2 == 0:
                 # TODO(developer): Define how the validator normalizes scores before setting weights.
-                weights = torch.nn.functional.normalize(scores, p=1.0, dim=0)
+                weights = torch.nn.functional.normalize(reliance_scores, p=1.0, dim=0)
                 bt.logging.info(f"Setting weights: {weights}")
                 # This is a crucial step that updates the incentive mechanism on the Bittensor blockchain.
                 # Miners with higher scores (or weights) receive a larger share of TAO rewards on this subnet.
@@ -157,10 +212,10 @@ def main( config ):
                     wallet = wallet, # Wallet to sign set weights using hotkey.
                     uids = metagraph.uids, # Uids of the miners to set weights for.
                     weights = weights, # Weights to set for the miners.
-                    wait_for_inclusion = True
+                    wait_for_inclusion = True # origin : True
                 )
                 if result: bt.logging.success('Successfully set weights.')
-                else: bt.logging.error('Failed to set weights.') 
+                else: bt.logging.error('Failed to set weights.')
 
             # End the current step and prepare for the next iteration.
             step += 1

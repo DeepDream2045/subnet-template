@@ -30,6 +30,15 @@ import bittensor as bt
 # import this repo
 import template
 
+# TODO : Added
+from typing import Tuple
+import numpy as np
+import torch
+import pickle
+from torchvision import datasets, transforms
+from neurons.mnist_train import Net
+# END TODO
+
 def get_config():
     # Step 2: Set up the configuration parser
     # This function initializes the necessary command-line arguments.
@@ -101,10 +110,22 @@ def main( config ):
         my_subnet_uid = metagraph.hotkeys.index(wallet.hotkey.ss58_address)
         bt.logging.info(f"Running miner on uid: {my_subnet_uid}")
 
+    # TODO ADD
+
+    model = Net().to('cpu')
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    dataset1 = datasets.MNIST('../data', train=True, download=True,
+                              transform=transform)
+
+    # END ADD
+
     # Step 4: Set up miner functionalities
     # The following functions control the miner's response to incoming requests.
     # The blacklist function decides if a request should be ignored.
-    def blacklist_fn( synapse: template.protocol.Dummy ) -> bool:
+    def blacklist_fn( synapse: template.protocol.Dummy ) -> Tuple[bool, str]:
         # TODO(developer): Define how miners should blacklist requests. This Function 
         # Runs before the synapse data has been deserialized (i.e. before synapse.data is available).
         # The synapse is instead contructed via the headers of the request. It is important to blacklist
@@ -113,14 +134,33 @@ def main( config ):
         if synapse.dendrite.hotkey not in metagraph.hotkeys:
             # Ignore requests from unrecognized entities.
             bt.logging.trace(f'Blacklisting unrecognized hotkey {synapse.dendrite.hotkey}')
-            return True
-        # TODO(developer): In practice it would be wise to blacklist requests from entities that 
+            return(True, f"Unrecognized hotkey {synapse.dendrite.hotkey}")
+        # TODO(developer): In practice it would be wise to blacklist requests from entities that
         # are not validators, or do not have enough stake. This can be checked via metagraph.S
         # and metagraph.validator_permit. You can always attain the uid of the sender via a
         # metagraph.hotkeys.index( synapse.dendrite.hotkey ) call.
         # Otherwise, allow the request to be processed further.
+
+        # # # TODO : ADD
+        # # Check the validator permission
+        # caller_uid = metagraph.hotkeys.index( synapse.dendrite.hotkey ) # Get the caller index.
+        # if not metagraph.validator_permit[caller_uid]:
+        #     bt.logging.trace(f'Blacklisting invalid validator {synapse.dendrite.hotkey}')
+        #     return(True, f"No validation permission {synapse.dendrite.hotkey}")
+        # # # END TODO
+
+        # TODO : ADD
+        # Check the validator has enough stakes
+        caller_uid = metagraph.hotkeys.index( synapse.dendrite.hotkey ) # Get the caller index.
+        stake = float( metagraph.S[ caller_uid ] * synapse.dummy_score) # Return the stake as the priority.
+        if stake == 0.0:
+            # Ignore requests from validators with empty wallet
+            bt.logging.trace(f'Blacklisting empty wallet {synapse.dendrite.hotkey}')
+            return(True, f"Empty wallet validator {synapse.dendrite.hotkey}")
+        # END TODO
+
         bt.logging.trace(f'Not Blacklisting recognized hotkey {synapse.dendrite.hotkey}')
-        return False
+        return(False, "False")
 
     # The priority function determines the order in which requests are handled.
     # More valuable or higher-priority requests are processed before others.
@@ -132,9 +172,9 @@ def main( config ):
         # request should be processed later.
         # Below: simple logic, prioritize requests from entities with more stake.
         caller_uid = metagraph.hotkeys.index( synapse.dendrite.hotkey ) # Get the caller index.
-        prirority = float( metagraph.S[ caller_uid ] ) # Return the stake as the priority.
-        bt.logging.trace(f'Prioritizing {synapse.dendrite.hotkey} with value: ', prirority)
-        return prirority
+        priority = float( metagraph.S[ caller_uid ] ) # Return the stake as the priority.
+        bt.logging.trace(f'Prioritizing {synapse.dendrite.hotkey} with value: ', priority)
+        return priority
 
     # This is the core miner function, which decides the miner's response to a valid, high-priority request.
     def dummy( synapse: template.protocol.Dummy ) -> template.protocol.Dummy:
@@ -143,12 +183,43 @@ def main( config ):
         # This function runs after the blacklist and priority functions have been called.
         # Below: simple template logic: return the input value multiplied by 2.
         # If you change this, your miner will lose emission in the network incentive landscape.
-        synapse.dummy_output = synapse.dummy_input * 2
+        # synapse.dummy_output = synapse.dummy_input * 2
+        # return synapse
+
+        # TODO : ADD
+        # Check if miner should update the model and update it.
+        if synapse.dummy_update:
+            # model = synapse.dummy_model().to('cpu')
+            # with open(synapse.dummy_model_path, 'rb') as f:
+            state = torch.load(synapse.dummy_model_path)
+            model.load_state_dict(state['model'])
+
+        # Load MNIST dataset
+        input = dataset1[0][0].unsqueeze(0)
+        target = torch.tensor(dataset1[0][1]).unsqueeze(0)
+        # Redefined the dummy output using random.
+        output = model(input)
+        loss = torch.nn.functional.nll_loss(output, target)
+        loss.backward()
+        grads = [param.grad for param in model.parameters()]
+
+        # synapse.dummy_output = []
+        # for grad in grads:
+        #     synapse.dummy_output.append(grad.numpy())
+        synapse.dummy_output = [np.array(1), np.array(2)]
+        # synapse.dummy_output = grads
+
+
+        # return synapse.dummy_output
         return synapse
+        # END TODO
+
 
     # Step 5: Build and link miner functions to the axon.
     # The axon handles request processing, allowing validators to send this process requests.
-    axon = bt.axon( wallet = wallet )
+    # TODO : ADD
+    # Added the port configuration to use multiple miners.
+    axon = bt.axon( wallet = wallet, port = config.axon.port ) # origin : axon = bt.axon( wallet = wallet )
     bt.logging.info(f"Axon {axon}")
 
     # Attach determiners which functions are called when servicing a request.

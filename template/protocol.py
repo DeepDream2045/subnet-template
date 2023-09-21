@@ -19,6 +19,8 @@
 
 import typing
 import bittensor as bt
+import torch
+import numpy as np
 
 # TODO(developer): Rewrite with your protocol definition.
 
@@ -53,10 +55,31 @@ class Dummy( bt.Synapse ):
     # Required request input, filled by sending dendrite caller.
     dummy_input: int
 
-    # Optional request output, filled by recieving axon.
-    dummy_output: typing.Optional[int] = None
+    # TODO : ADD
+    # Reward score assessed by the validator, filled by sending dendrite caller.
+    dummy_score: float
 
-    def deserialize(self) -> int:
+    # Model definition
+    # dummy_model: torch.nn.Module
+
+    # Model update flag. If True, each miner should reload the model updated by the validator first.
+    dummy_update: bool
+
+    # Model path for the miner. Validator stores the model to this path and let the miner know it.
+    dummy_model_path: str
+
+    # Optional request output, filled by recieving axon.
+    dummy_output: typing.List[torch.FloatTensor]
+    # dummy_output: torch.Tensor
+    # END ADD
+
+    # # Optional request output, filled by recieving axon.
+    # dummy_output: typing.Optional[float] = None
+
+    class Config:
+        arbitrary_types_allowed=True
+
+    def deserialize(self) -> bt.Synapse:
         """
         Deserialize the dummy output. This method retrieves the response from
         the miner in the form of dummy_output, deserializes it and returns it
