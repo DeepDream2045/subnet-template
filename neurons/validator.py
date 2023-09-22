@@ -116,9 +116,10 @@ def main( config ):
     # Define two scores; reliance_scores and capacity_scores
     # reliance_scores shows how correctly each miner is computing.
     # capacity_scores shows how much data each miner can handle at the same time.
-    # validators and other miners who return None will gradually have the reliance_score of 0.
+    # The reliance_score of validators and other miners who return None will gradually become 0.
     reliance_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
     capacity_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
+    capacity_scores = capacity_scores / torch.sum(capacity_scores)
     # End ADD
 
     bt.logging.info(f"Reliance weights of miners: {reliance_scores}")
@@ -161,13 +162,20 @@ def main( config ):
 
             responses = []
             # Set input to each axon and get responses each
+            data, target = next(iter(train_dataloader))
+            data_len = data.shape[0]
+            data_segs = [0]
+            total_capa_score = sum(capacity_scores)
+            for capa_score in capacity_scores:
+                data_segs.append(min(int(data_len * capa_score / total_capa_score) + data_segs[-1], data_len))
+
             for i, axon in enumerate(metagraph.axons):
-                data, target = next(iter(train_dataloader))
                 response = dendrite.query(
                     axon,
                     template.protocol.Dummy(
-                        dummy_input = [bt.Tensor.serialize(data), bt.Tensor.serialize(target)],
-                        dummy_score = 1.0,
+                        dummy_input = [bt.Tensor.serialize(data[data_segs[i]:data_segs[i+1]]),
+                                       bt.Tensor.serialize(target[data_segs[i]:data_segs[i+1]])],
+                        dummy_score = float(reliance_scores[i]),
                         dummy_update = True,
                         dummy_model_path = model_ckpt_path),
                     deserialize = True
@@ -181,9 +189,6 @@ def main( config ):
 
             # # TODO(developer): Define how the validator scores responses.
             # TODO : ADD
-            import numpy as np
-            # responses_np = np.array(responses)
-            # center = np.mean(responses_np[responses_np!=np.array(None)])
             # Calculate the center of the result using reliance scores.
             center = []
             total_score = 1e-10
@@ -243,6 +248,8 @@ def main( config ):
 
             # Normalize the reliance_scores to avoid the shrink of reliance_scores.
             reliance_scores = reliance_scores / torch.max(reliance_scores)
+            capacity_scores =  torch.mul(capacity_scores, reliance_scores)
+            capacity_scores = capacity_scores / torch.sum(capacity_scores)
             bt.logging.info(f"Reliance scores: {reliance_scores}")
             # END ADD
 

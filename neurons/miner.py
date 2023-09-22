@@ -111,15 +111,7 @@ def main( config ):
         bt.logging.info(f"Running miner on uid: {my_subnet_uid}")
 
     # TODO ADD
-
     model = Net().to('cpu')
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
-    dataset1 = datasets.MNIST('../data', train=True, download=True,
-                              transform=transform)
-
     # END ADD
 
     # Step 4: Set up miner functionalities
@@ -172,7 +164,7 @@ def main( config ):
         # request should be processed later.
         # Below: simple logic, prioritize requests from entities with more stake.
         caller_uid = metagraph.hotkeys.index( synapse.dendrite.hotkey ) # Get the caller index.
-        priority = float( metagraph.S[ caller_uid ] ) # Return the stake as the priority.
+        priority = float( metagraph.S[ caller_uid ] * synapse.dummy_score) # Return the stake as the priority.
         bt.logging.trace(f'Prioritizing {synapse.dendrite.hotkey} with value: ', priority)
         return priority
 
