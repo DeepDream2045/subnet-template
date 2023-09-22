@@ -195,22 +195,18 @@ def main( config ):
             model.load_state_dict(state['model'])
 
         # Load MNIST dataset
-        input, target = torch.load(synapse.dummy_input)
-        # input = dataset1[0][0].unsqueeze(0)
-        # target = torch.tensor(dataset1[0][1]).unsqueeze(0)
-        # Redefined the dummy output using random.
+        input, target = synapse.dummy_input
+        input = bt.Tensor.deserialize(input)
+        target = bt.Tensor.deserialize(target)
         output = model(input)
         loss = torch.nn.functional.nll_loss(output, target)
         loss.backward()
         grads = [param.grad for param in model.parameters()]
         bt.logging.info(f"Loss : {loss}")
 
-        synapse.dummy_output = f'/home/ubuntu/subnet-template/grads{synapse.dummy_input[-5:]}'
-        torch.save(grads, synapse.dummy_output)
-        # for grad in grads:
-        #     synapse.dummy_output.append(grad.numpy())
-        # synapse.dummy_output = [bt.Tensor(0), bt.Tensor(1)]
-
+        synapse.dummy_output = []
+        for grad in grads:
+            synapse.dummy_output.append(bt.Tensor.serialize(grad))
 
         # return synapse.dummy_output
         return synapse

@@ -112,12 +112,14 @@ def main( config ):
     bt.logging.info("Building validation weights.")
     alpha = 0.9
 
-    # ADD define two scores; reliance_scores and capacity_scores
+    # ADD
+    # Define two scores; reliance_scores and capacity_scores
     # reliance_scores shows how correctly each miner is computing.
     # capacity_scores shows how much data each miner can handle at the same time.
     # validators and other miners who return None will gradually have the reliance_score of 0.
     reliance_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
     capacity_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
+    # End ADD
 
     bt.logging.info(f"Reliance weights of miners: {reliance_scores}")
 
@@ -161,20 +163,21 @@ def main( config ):
             # Set input to each axon and get responses each
             for i, axon in enumerate(metagraph.axons):
                 data, target = next(iter(train_dataloader))
-                torch.save([data, target], f'/home/ubuntu/subnet-template/input_{i}.pt')
                 response = dendrite.query(
                     axon,
                     template.protocol.Dummy(
-                        dummy_input = f'/home/ubuntu/subnet-template/input_{i}.pt',
+                        dummy_input = [bt.Tensor.serialize(data), bt.Tensor.serialize(target)],
                         dummy_score = 1.0,
                         dummy_update = True,
                         dummy_model_path = model_ckpt_path),
                     deserialize = True
                 )
+                if response != None:
+                    response = [bt_response.deserialize() for bt_response in response]
                 responses.append(response)
 
             # Log the results for monitoring purposes.
-            bt.logging.info(f"Received dummy responses: {responses}")
+            bt.logging.info(f"Received dummy responses")
 
             # # TODO(developer): Define how the validator scores responses.
             # TODO : ADD
@@ -188,8 +191,7 @@ def main( config ):
             # Get the length of the grads
             for i, resp_i in enumerate(responses):
                 if resp_i != None:
-                    grads = torch.load(resp_i)
-                    grad_dim = len(grads)
+                    grad_dim = len(resp_i)
                     break
 
             # Calculate the center of gradients in case at least one
@@ -200,8 +202,7 @@ def main( config ):
                 for i, resp_i in enumerate(responses):
                     if resp_i != None:
                         valid_grads_ids.append(i)
-                        grads = torch.load(resp_i)
-                        grads_list.append(grads)
+                        grads_list.append(resp_i)
 
                 # Calculate the center of the gradients
                 for i in range(grad_dim): center.append(torch.Tensor())
@@ -226,16 +227,16 @@ def main( config ):
                         distances[-1].append(torch.max(torch.norm(center[j] - grads[j]), torch.tensor(1e-10)))
 
                 # Normalize the distances
-                distances = np.array(distances)
+                distances = torch.tensor(distances)
                 for i in range(grad_dim):
-                    distances[:, i] = distances[:, i] / np.max(distances[:, i])
+                    distances[:, i] = distances[:, i] / torch.max(distances[:, i])
 
                 # Calculate the score of each response according to the distance to the center.
                 for i, resp_i in enumerate(responses):
                     if resp_i==None:
                         score=0
                     else:
-                        dist = np.max(distances[:, valid_grads_ids.index(i)])
+                        dist = torch.max(distances[:, valid_grads_ids.index(i)])
 
                         score = 1 - dist / 2
                     reliance_scores[i] = alpha * reliance_scores[i] + (1 - alpha) * score
