@@ -254,7 +254,7 @@ def main( config ):
             # END ADD
 
             # Periodically update the weights on the Bittensor blockchain.
-            if (step + 1) % 2000 == 0:
+            if (step + 1) % 2 == 0:
                 # TODO(developer): Define how the validator normalizes scores before setting weights.
                 weights = torch.nn.functional.normalize(reliance_scores, p=1.0, dim=0)
                 bt.logging.info(f"Setting weights: {weights}")
@@ -275,7 +275,7 @@ def main( config ):
             # Resync our local state with the latest state from the blockchain.
             metagraph = subtensor.metagraph(config.netuid)
             # Sleep for a duration equivalent to the block time (i.e., time between successive blocks).
-            # time.sleep(bt.__blocktime__)
+            time.sleep(bt.__blocktime__)
 
         # If we encounter an unexpected error, log it for debugging.
         except RuntimeError as e:
