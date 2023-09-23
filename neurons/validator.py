@@ -137,7 +137,7 @@ def main( config ):
 
     # Define the cifar-10 dataloader for training dataset
     train_kwargs = {'batch_size': len(metagraph.S) * 64, 'shuffle': True}
-    cifar_dataset = datasets.load_dataset("cifar10", split='train[:640]').with_format('torch')
+    cifar_dataset = datasets.load_dataset("cifar10", split='train[:]').with_format('torch')
     cifar_dataloader = torch.utils.data.DataLoader(cifar_dataset, **train_kwargs)
 
     # Define the resnet18 model and model checkpoint path.
