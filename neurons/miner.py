@@ -32,11 +32,7 @@ import template
 
 # TODO : Added
 from typing import Tuple
-import numpy as np
 import torch
-import pickle
-from torchvision import datasets, transforms
-from neurons.mnist_train import Net
 # END TODO
 
 def get_config():
@@ -111,7 +107,22 @@ def main( config ):
         bt.logging.info(f"Running miner on uid: {my_subnet_uid}")
 
     # TODO ADD
-    model = Net().to('cpu')
+    from transformers import ResNetModel, ResNetConfig, ResNetForImageClassification, ConvNextFeatureExtractor
+    resnet_config = ResNetConfig(
+        num_channels=3,
+        embedding_size=64,
+        hidden_sizes=[64, 128, 256, 512],
+        depths=[2, 2, 2, 2],
+        layer_type='basic',
+        hidden_act='relu',
+        downsample_in_first_stage=False,
+        out_features=['stage4'],
+        out_indices=[4],
+        num_labels=10,
+        label2id={'airplane': 0, 'automobile': 1, 'bird': 2, 'cat': 3, 'deer': 4, 'dog': 5, 'frog': 6, 'horse': 7, 'ship': 8, 'truck': 9},
+        id2label={0: 'airplane', 1: 'automobile', 2: 'bird', 3: 'cat', 4: 'deer', 5: 'dog', 6: 'frog', 7: 'horse', 8: 'ship', 9: 'truck'}
+    )
+    model = ResNetForImageClassification(resnet_config)
     # END ADD
 
     # Step 4: Set up miner functionalities
@@ -185,13 +196,18 @@ def main( config ):
             # with open(synapse.dummy_model_path, 'rb') as f:
             state = torch.load(synapse.dummy_model_path)
             model.load_state_dict(state['model'])
+            # state = synapse.dummy_model_db['model']
 
-        # Load MNIST dataset
+        # Load dataset
         input, target = synapse.dummy_input
         input = bt.Tensor.deserialize(input)
+        input = input[synapse.dummy_segs[my_subnet_uid]:synapse.dummy_segs[my_subnet_uid+1]]
         target = bt.Tensor.deserialize(target)
-        output = model(input)
-        loss = torch.nn.functional.nll_loss(output, target)
+        target = target[synapse.dummy_segs[my_subnet_uid]:synapse.dummy_segs[my_subnet_uid + 1]]
+        softmax = torch.nn.Softmax(dim=1)
+        output = softmax(model(input)['logits'])
+        xentr_loss = torch.nn.CrossEntropyLoss()
+        loss = xentr_loss(output, target)
         loss.backward()
         grads = [param.grad for param in model.parameters()]
         bt.logging.info(f"Loss : {loss}")

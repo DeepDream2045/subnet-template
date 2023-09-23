@@ -31,7 +31,10 @@ import bittensor as bt
 # import this repo
 import template
 # ADD : Import necessary libraries
-from torchvision import datasets, transforms
+# from torchvision import datasets, transforms
+import datasets as datasets
+import wandb
+
 # END ADD
 
 # Step 2: Set up the configuration parser
@@ -132,19 +135,35 @@ def main( config ):
     # Define the interval of model updates for miners
     update_step = 2
 
-    # Define the dataloader for training dataset
+    # Define the cifar-10 dataloader for training dataset
     train_kwargs = {'batch_size': len(metagraph.S) * 64, 'shuffle': True}
-    transform=transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-        ])
-    dataset1 = datasets.MNIST('../data', train=True, download=True,
-                       transform=transform)
-    train_dataloader = torch.utils.data.DataLoader(dataset1,**train_kwargs)
+    cifar_dataset = datasets.load_dataset("cifar10", split='train[:640]').with_format('torch')
+    cifar_dataloader = torch.utils.data.DataLoader(cifar_dataset, **train_kwargs)
 
-    # Define the model and model checkpoint path.
-    from mnist_train import Net
-    model = Net().to('cpu')
+    # Define the resnet18 model and model checkpoint path.
+    from transformers import ResNetModel, ResNetConfig, ResNetForImageClassification, ConvNextFeatureExtractor
+    resnet_config = ResNetConfig(
+        num_channels=3,
+        embedding_size=64,
+        hidden_sizes=[64, 128, 256, 512],
+        depths=[2, 2, 2, 2],
+        layer_type='basic',
+        hidden_act='relu',
+        downsample_in_first_stage=False,
+        out_features=['stage4'],
+        out_indices=[4],
+        num_labels=10,
+        label2id={'airplane': 0, 'automobile': 1, 'bird': 2, 'cat': 3, 'deer': 4, 'dog': 5, 'frog': 6, 'horse': 7, 'ship': 8, 'truck': 9},
+        id2label={0: 'airplane', 1: 'automobile', 2: 'bird', 3: 'cat', 4: 'deer', 5: 'dog', 6: 'frog', 7: 'horse', 8: 'ship', 9: 'truck'}
+    )
+
+    img_processor = ConvNextFeatureExtractor(size=32,
+                                             image_mean=[0.485, 0.456, 0.406],
+                                             image_std=[0.229, 0.224, 0.225])
+
+
+    # # Define the model and model checkpoint path.
+    model = ResNetForImageClassification(resnet_config)
     optimizer = torch.optim.Adadelta(model.parameters(), lr=0.01)
 
     model_ckpt_path = '/home/ubuntu/subnet-template/model.pt'
@@ -160,31 +179,37 @@ def main( config ):
             if step % update_step == 0:
                 torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()}, model_ckpt_path)
 
-            responses = []
             # Set input to each axon and get responses each
-            data, target = next(iter(train_dataloader))
-            data_len = data.shape[0]
+            data = next(iter(cifar_dataloader))
+            images = data['img']
+            # labels = torch.nn.functional.one_hot(data['label'], num_classes=10)
+            labels = data['label']
+            images = img_processor(images, return_tensors='pt')['pixel_values']
+
+            data_len = images.shape[0]
             data_segs = [0]
             total_capa_score = sum(capacity_scores)
             for capa_score in capacity_scores:
                 data_segs.append(min(int(data_len * capa_score / total_capa_score) + data_segs[-1], data_len))
 
-            for i, axon in enumerate(metagraph.axons):
-                response = dendrite.query(
-                    axon,
-                    template.protocol.Dummy(
-                        dummy_input = [bt.Tensor.serialize(data[data_segs[i]:data_segs[i+1]]),
-                                       bt.Tensor.serialize(target[data_segs[i]:data_segs[i+1]])],
-                        dummy_score = float(reliance_scores[i]),
-                        dummy_update = True,
-                        dummy_model_path = model_ckpt_path),
-                    deserialize = True
-                )
-                if response != None:
-                    response = [bt_response.deserialize() for bt_response in response]
-                responses.append(response)
+            responses = dendrite.query(
+                metagraph.axons,
+                template.protocol.Dummy(
+                    dummy_input = [bt.Tensor.serialize(images),
+                                   bt.Tensor.serialize(labels)],
+                    dummy_score = 1.0,
+                    dummy_segs = data_segs,
+                    dummy_update = True,
+                    dummy_model_path = model_ckpt_path),
+                deserialize = True
 
-            # Log the results for monitoring purposes.
+            )
+            for i, response in enumerate(responses):
+                if response!=None:
+                    for j, grad in enumerate(response):
+                        response[j] = grad.deserialize()
+                    responses[i]=response
+
             bt.logging.info(f"Received dummy responses")
 
             # # TODO(developer): Define how the validator scores responses.
@@ -254,7 +279,7 @@ def main( config ):
             # END ADD
 
             # Periodically update the weights on the Bittensor blockchain.
-            if (step + 1) % 2 == 0:
+            if (step + 1) % 2000 == 0:
                 # TODO(developer): Define how the validator normalizes scores before setting weights.
                 weights = torch.nn.functional.normalize(reliance_scores, p=1.0, dim=0)
                 bt.logging.info(f"Setting weights: {weights}")
@@ -275,7 +300,7 @@ def main( config ):
             # Resync our local state with the latest state from the blockchain.
             metagraph = subtensor.metagraph(config.netuid)
             # Sleep for a duration equivalent to the block time (i.e., time between successive blocks).
-            time.sleep(bt.__blocktime__)
+            # time.sleep(bt.__blocktime__)
 
         # If we encounter an unexpected error, log it for debugging.
         except RuntimeError as e:
@@ -286,6 +311,8 @@ def main( config ):
         except KeyboardInterrupt:
             bt.logging.success("Keyboard interrupt detected. Exiting validator.")
             exit()
+
+    model_wandb.finish()
 
 # The main function parses the configuration and runs the validator.
 if __name__ == "__main__":

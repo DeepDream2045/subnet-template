@@ -21,6 +21,7 @@ import typing
 import bittensor as bt
 import torch
 import numpy as np
+import wandb
 
 # TODO(developer): Rewrite with your protocol definition.
 
@@ -61,6 +62,9 @@ class Dummy( bt.Synapse ):
 
     # Model definition
     # dummy_model: torch.nn.Module
+
+    # Batch segmentation
+    dummy_segs: list
 
     # Model update flag. If True, each miner should reload the model updated by the validator first.
     dummy_update: bool
