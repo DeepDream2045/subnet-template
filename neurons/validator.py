@@ -18,7 +18,6 @@
 # DEALINGS IN THE SOFTWARE.
 
 # Bittensor Validator Template:
-# TODO(developer): Rewrite based on protocol defintion.
 
 # Step 1: Import necessary libraries and modules
 import os
@@ -27,13 +26,11 @@ import torch
 import argparse
 import traceback
 import bittensor as bt
-
-# import this repo
-import template
-# ADD : Import necessary libraries
 import datasets as datasets
 import pickle
-# END ADD
+from transformers import ResNetModel, ResNetConfig, ResNetForImageClassification, ConvNextFeatureExtractor
+
+import template
 
 # Step 2: Set up the configuration parser
 # This function is responsible for setting up and parsing command-line arguments.
@@ -113,15 +110,13 @@ def main( config ):
     bt.logging.info("Building validation weights.")
     alpha = 0.9
 
-    # ADD
     # Define two scores; reliance_scores and capacity_scores
-    # reliance_scores shows how correctly each miner is computing.
-    # capacity_scores shows how much data each miner can handle at the same time.
-    # The reliance_score of validators and other miners who return None will gradually become 0.
+    # The reliance_scores shows how correctly each miner is computing.
+    # The capacity_scores shows how much data each miner can handle at the same time.
+    # The reliance_score of validators and other miners who return None will gradually converge to 0.
     reliance_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
     capacity_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
     capacity_scores = capacity_scores / torch.sum(capacity_scores)
-    # End ADD
 
     bt.logging.info(f"Reliance weights of miners: {reliance_scores}")
 
@@ -129,17 +124,20 @@ def main( config ):
     bt.logging.info("Starting validator loop.")
     step = 0
 
-    # TODO ADD
     # Define the interval of model updates for miners
     update_step = 2
 
     # Define the cifar-10 dataloader for training dataset
-    train_kwargs = {'batch_size': len(metagraph.S) * 512, 'shuffle': True}
+    train_kwargs = {'batch_size': len(metagraph.S) * 256, 'shuffle': True}
     cifar_dataset = datasets.load_dataset("cifar10", split='train[:]').with_format('torch')
     cifar_dataloader = torch.utils.data.DataLoader(cifar_dataset, **train_kwargs)
 
+    # Define the image preprocessor
+    img_processor = ConvNextFeatureExtractor(size=32,
+                                             image_mean=[0.485, 0.456, 0.406],
+                                             image_std=[0.229, 0.224, 0.225])
+
     # Define the resnet18 model and model checkpoint path.
-    from transformers import ResNetModel, ResNetConfig, ResNetForImageClassification, ConvNextFeatureExtractor
     resnet_config = ResNetConfig(
         num_channels=3,
         embedding_size=64,
@@ -154,66 +152,64 @@ def main( config ):
         label2id={'airplane': 0, 'automobile': 1, 'bird': 2, 'cat': 3, 'deer': 4, 'dog': 5, 'frog': 6, 'horse': 7, 'ship': 8, 'truck': 9},
         id2label={0: 'airplane', 1: 'automobile', 2: 'bird', 3: 'cat', 4: 'deer', 5: 'dog', 6: 'frog', 7: 'horse', 8: 'ship', 9: 'truck'}
     )
-
-    img_processor = ConvNextFeatureExtractor(size=32,
-                                             image_mean=[0.485, 0.456, 0.406],
-                                             image_std=[0.229, 0.224, 0.225])
-
-
-    # # Define the model and model checkpoint path.
     model = ResNetForImageClassification(resnet_config)
     optimizer = torch.optim.Adadelta(model.parameters(), lr=0.01)
 
     model_dump_path = '/home/ubuntu/subnet-template/model.pkl'
     with open(model_dump_path, 'wb') as f:
         pickle.dump(model, f)
-    # END ADD
 
     while True:
         try:
-            # TODO(developer): Define how the validator selects a miner to query, how often, etc.
             # Broadcast a query to all miners on the network.
-            # SHOULD separate the input according to capacity_scores for each axon.
+
             # Check if miner model should be updated.
             if step % update_step == 0:
+                mr_update_flag = True
                 with open(model_dump_path, 'wb') as f:
                     pickle.dump(model, f)
+            else:
+                mr_update_flag = False
 
-            # Set input to each axon and get responses
+            # Set input data to each axon and get responses
+            # The whole batch and corresponding segments are parsed in order to send requests simultaneously.
             data = next(iter(cifar_dataloader))
             images = data['img']
             labels = data['label']
             images = img_processor(images, return_tensors='pt')['pixel_values']
 
+            # Set the segmentation according to capacity_scores
             data_len = images.shape[0]
             data_segs = [0]
             total_capa_score = sum(capacity_scores)
             for capa_score in capacity_scores:
                 data_segs.append(min(int(data_len * capa_score / total_capa_score) + data_segs[-1], data_len))
 
+            # Send requests to synapses
+            rel_scores_ = list(bt.Tensor.serialize(reliance_scores).numpy())
             responses = dendrite.query(
                 metagraph.axons,
-                template.protocol.Dummy(
-                    dummy_input = [bt.Tensor.serialize(images),
+                template.protocol.MapReduce(
+                    mr_input = [bt.Tensor.serialize(images),
                                    bt.Tensor.serialize(labels)],
-                    dummy_score = 1.0,
-                    dummy_segs = data_segs,
-                    dummy_update = True,
-                    dummy_model_path = model_dump_path),
+                    reliance_score = rel_scores_,
+                    input_segs = data_segs,
+                    update_model = mr_update_flag,
+                    model_path = model_dump_path),
                 deserialize = True
 
             )
+
+            # Get the gradients and turn them from bittensor Tensor to torch Tensor
             for i, response in enumerate(responses):
                 if response!=None:
                     for j, grad in enumerate(response):
                         response[j] = grad.deserialize()
                     responses[i]=response
 
-            bt.logging.info(f"Received dummy responses")
+            bt.logging.info(f"Received miner responses")
 
-            # # TODO(developer): Define how the validator scores responses.
-            # TODO : ADD
-            # Calculate the center of the result using reliance scores.
+            # Calculate the center of the gradients using reliance scores.
             center = []
             total_score = 1e-10
             grad_dim = 0
@@ -223,7 +219,7 @@ def main( config ):
                     grad_dim = len(resp_i)
                     break
 
-            # Calculate the center of gradients in case at least one
+            # Calculate the center of gradients in case at least one synapse is responding
             if grad_dim > 0:
                 # Make the list of grads
                 grads_list = []
@@ -243,7 +239,7 @@ def main( config ):
                 for j in range(grad_dim):
                     center[j] = torch.sum(center[j], dim=0) / total_score
 
-                # Apply backpropagation using gradients center
+                # Apply backpropagation using center of gradients
                 for j, param in enumerate(model.parameters()):
                     param.grad = center[j]
                 optimizer.step()
@@ -260,7 +256,7 @@ def main( config ):
                 for i in range(grad_dim):
                     distances[:, i] = distances[:, i] / torch.max(distances[:, i])
 
-                # Calculate the score of each response according to the distance to the center.
+                # Calculate the reliance score of each response according to the distance to the center.
                 for i, resp_i in enumerate(responses):
                     if resp_i==None:
                         score=0
@@ -278,8 +274,7 @@ def main( config ):
             # END ADD
 
             # Periodically update the weights on the Bittensor blockchain.
-            if (step + 1) % 2000 == 0:
-                # TODO(developer): Define how the validator normalizes scores before setting weights.
+            if (step + 1) % 20 == 0:
                 weights = torch.nn.functional.normalize(reliance_scores, p=1.0, dim=0)
                 bt.logging.info(f"Setting weights: {weights}")
                 # This is a crucial step that updates the incentive mechanism on the Bittensor blockchain.

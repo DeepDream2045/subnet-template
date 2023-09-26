@@ -23,77 +23,60 @@ import torch
 import numpy as np
 import wandb
 
-# TODO(developer): Rewrite with your protocol definition.
-
-# This is the protocol for the dummy miner and validator.
+# This is the protocol for the miner and validator.
 # It is a simple request-response protocol where the validator sends a request
-# to the miner, and the miner responds with a dummy response.
+# to the miner, and the miner responds with a response.
 
-# ---- miner ----
-# Example usage:
-#   def dummy( synapse: Dummy ) -> Dummy:
-#       synapse.dummy_output = synapse.dummy_input + 1
-#       return synapse
-#   axon = bt.axon().attach( dummy ).serve(netuid=...).start()
-
-# ---- validator ---
-# Example usage:
-#   dendrite = bt.dendrite()
-#   dummy_output = dendrite.query( Dummy( dummy_input = 1 ) )
-#   assert dummy_output == 2
-
-class Dummy( bt.Synapse ):
+class MapReduce(bt.Synapse):
     """
-    A simple dummy protocol representation which uses bt.Synapse as its base.
-    This protocol helps in handling dummy request and response communication between
+    A simple MapReduce protocol representation which uses bt.Synapse as its base.
+    This protocol helps in handling request and response communication between
     the miner and the validator.
 
     Attributes:
-    - dummy_input: An integer value representing the input request sent by the validator.
-    - dummy_output: An optional integer value which, when filled, represents the response from the miner.
+    - mr_input: An integer value representing the input request sent by the validator.
+    - reliance_score : A list of reliance scores of all the miners the validator is sending requests.
+    - input_segs : A list of segments of input data according to miners the validator is sending requests.
+    - update_model : A flag to show if the model should be updated.
+    - model_path : A path of the pickle model dump file.
+    - mr_output: An optional integer value which, when filled, represents the response from the miner.
     """
 
     # Required request input, filled by sending dendrite caller.
-    dummy_input: typing.List[bt.Tensor]
+    mr_input: typing.List[bt.Tensor]
 
-    # TODO : ADD
     # Reward score assessed by the validator, filled by sending dendrite caller.
-    dummy_score: float
-
-    # Model definition
-    # dummy_model: torch.nn.Module
+    reliance_score: typing.List[float]
 
     # Batch segmentation
-    dummy_segs: list
+    input_segs: list
 
     # Model update flag. If True, each miner should reload the model updated by the validator first.
-    dummy_update: bool
+    update_model: bool
 
     # Model path for the miner. Validator stores the model to this path and let the miner know it.
-    dummy_model_path: str
+    model_path: str
 
     # Optional request output, filled by recieving axon.
-    dummy_output: typing.Optional[typing.List[bt.Tensor]] = None
-
-    # END ADD
+    mr_output: typing.Optional[typing.List[bt.Tensor]] = None
 
     class Config:
         arbitrary_types_allowed=True
 
     def deserialize(self) -> bt.Synapse:
         """
-        Deserialize the dummy output. This method retrieves the response from
-        the miner in the form of dummy_output, deserializes it and returns it
+        Deserialize the MapReduce output. This method retrieves the response from
+        the miner in the form of mr_output, deserializes it and returns it
         as the output of the dendrite.query() call.
 
         Returns:
-        - int: The deserialized response, which in this case is the value of dummy_output.
+        - bittensor.Tensor: The deserialized response, which in this case is the value of mr_output.
 
         Example:
-        Assuming a Dummy instance has a dummy_output value of 5:
-        >>> dummy_instance = Dummy(dummy_input=4)
-        >>> dummy_instance.dummy_output = 5
-        >>> dummy_instance.deserialize()
+        Assuming a miner instance has a mr_output value of 5:
+        >>> mr_instance = MapReduce(mr_input=4)
+        >>> mr_instance.mr_output = 5
+        >>> mr_instance.deserialize()
         5
         """
-        return self.dummy_output
+        return self.mr_output
