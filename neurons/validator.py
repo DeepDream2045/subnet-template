@@ -31,10 +31,8 @@ import bittensor as bt
 # import this repo
 import template
 # ADD : Import necessary libraries
-# from torchvision import datasets, transforms
 import datasets as datasets
-import wandb
-
+import pickle
 # END ADD
 
 # Step 2: Set up the configuration parser
@@ -136,7 +134,7 @@ def main( config ):
     update_step = 2
 
     # Define the cifar-10 dataloader for training dataset
-    train_kwargs = {'batch_size': len(metagraph.S) * 64, 'shuffle': True}
+    train_kwargs = {'batch_size': len(metagraph.S) * 512, 'shuffle': True}
     cifar_dataset = datasets.load_dataset("cifar10", split='train[:]').with_format('torch')
     cifar_dataloader = torch.utils.data.DataLoader(cifar_dataset, **train_kwargs)
 
@@ -166,8 +164,9 @@ def main( config ):
     model = ResNetForImageClassification(resnet_config)
     optimizer = torch.optim.Adadelta(model.parameters(), lr=0.01)
 
-    model_ckpt_path = '/home/ubuntu/subnet-template/model.pt'
-    torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()}, model_ckpt_path)
+    model_dump_path = '/home/ubuntu/subnet-template/model.pkl'
+    with open(model_dump_path, 'wb') as f:
+        pickle.dump(model, f)
     # END ADD
 
     while True:
@@ -177,12 +176,12 @@ def main( config ):
             # SHOULD separate the input according to capacity_scores for each axon.
             # Check if miner model should be updated.
             if step % update_step == 0:
-                torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()}, model_ckpt_path)
+                with open(model_dump_path, 'wb') as f:
+                    pickle.dump(model, f)
 
-            # Set input to each axon and get responses each
+            # Set input to each axon and get responses
             data = next(iter(cifar_dataloader))
             images = data['img']
-            # labels = torch.nn.functional.one_hot(data['label'], num_classes=10)
             labels = data['label']
             images = img_processor(images, return_tensors='pt')['pixel_values']
 
@@ -200,7 +199,7 @@ def main( config ):
                     dummy_score = 1.0,
                     dummy_segs = data_segs,
                     dummy_update = True,
-                    dummy_model_path = model_ckpt_path),
+                    dummy_model_path = model_dump_path),
                 deserialize = True
 
             )
@@ -300,7 +299,7 @@ def main( config ):
             # Resync our local state with the latest state from the blockchain.
             metagraph = subtensor.metagraph(config.netuid)
             # Sleep for a duration equivalent to the block time (i.e., time between successive blocks).
-            # time.sleep(bt.__blocktime__)
+            time.sleep(bt.__blocktime__)
 
         # If we encounter an unexpected error, log it for debugging.
         except RuntimeError as e:
@@ -311,8 +310,6 @@ def main( config ):
         except KeyboardInterrupt:
             bt.logging.success("Keyboard interrupt detected. Exiting validator.")
             exit()
-
-    model_wandb.finish()
 
 # The main function parses the configuration and runs the validator.
 if __name__ == "__main__":

@@ -33,6 +33,12 @@ import template
 # TODO : Added
 from typing import Tuple
 import torch
+import pickle
+from transformers import (AutoImageProcessor,
+                          ResNetModel,
+                          ResNetConfig,
+                          ResNetForImageClassification,
+                          ConvNextFeatureExtractor)
 # END TODO
 
 def get_config():
@@ -106,24 +112,24 @@ def main( config ):
         my_subnet_uid = metagraph.hotkeys.index(wallet.hotkey.ss58_address)
         bt.logging.info(f"Running miner on uid: {my_subnet_uid}")
 
-    # TODO ADD
-    from transformers import ResNetModel, ResNetConfig, ResNetForImageClassification, ConvNextFeatureExtractor
-    resnet_config = ResNetConfig(
-        num_channels=3,
-        embedding_size=64,
-        hidden_sizes=[64, 128, 256, 512],
-        depths=[2, 2, 2, 2],
-        layer_type='basic',
-        hidden_act='relu',
-        downsample_in_first_stage=False,
-        out_features=['stage4'],
-        out_indices=[4],
-        num_labels=10,
-        label2id={'airplane': 0, 'automobile': 1, 'bird': 2, 'cat': 3, 'deer': 4, 'dog': 5, 'frog': 6, 'horse': 7, 'ship': 8, 'truck': 9},
-        id2label={0: 'airplane', 1: 'automobile', 2: 'bird', 3: 'cat', 4: 'deer', 5: 'dog', 6: 'frog', 7: 'horse', 8: 'ship', 9: 'truck'}
-    )
-    model = ResNetForImageClassification(resnet_config)
-    # END ADD
+    # # TODO ADD
+    # from transformers import ResNetModel, ResNetConfig, ResNetForImageClassification, ConvNextFeatureExtractor
+    # resnet_config = ResNetConfig(
+    #     num_channels=3,
+    #     embedding_size=64,
+    #     hidden_sizes=[64, 128, 256, 512],
+    #     depths=[2, 2, 2, 2],
+    #     layer_type='basic',
+    #     hidden_act='relu',
+    #     downsample_in_first_stage=False,
+    #     out_features=['stage4'],
+    #     out_indices=[4],
+    #     num_labels=10,
+    #     label2id={'airplane': 0, 'automobile': 1, 'bird': 2, 'cat': 3, 'deer': 4, 'dog': 5, 'frog': 6, 'horse': 7, 'ship': 8, 'truck': 9},
+    #     id2label={0: 'airplane', 1: 'automobile', 2: 'bird', 3: 'cat', 4: 'deer', 5: 'dog', 6: 'frog', 7: 'horse', 8: 'ship', 9: 'truck'}
+    # )
+    # model = ResNetForImageClassification(resnet_config)
+    # # END ADD
 
     # Step 4: Set up miner functionalities
     # The following functions control the miner's response to incoming requests.
@@ -192,11 +198,8 @@ def main( config ):
         # TODO : ADD
         # Check if miner should update the model and update it.
         if synapse.dummy_update:
-            # model = synapse.dummy_model().to('cpu')
-            # with open(synapse.dummy_model_path, 'rb') as f:
-            state = torch.load(synapse.dummy_model_path)
-            model.load_state_dict(state['model'])
-            # state = synapse.dummy_model_db['model']
+            with open(synapse.dummy_model_path, 'rb') as f:
+                model = pickle.load(f)
 
         # Load dataset
         input, target = synapse.dummy_input
@@ -204,6 +207,8 @@ def main( config ):
         input = input[synapse.dummy_segs[my_subnet_uid]:synapse.dummy_segs[my_subnet_uid+1]]
         target = bt.Tensor.deserialize(target)
         target = target[synapse.dummy_segs[my_subnet_uid]:synapse.dummy_segs[my_subnet_uid + 1]]
+
+        # Calculate the gradients
         softmax = torch.nn.Softmax(dim=1)
         output = softmax(model(input)['logits'])
         xentr_loss = torch.nn.CrossEntropyLoss()
@@ -216,14 +221,12 @@ def main( config ):
         for grad in grads:
             synapse.dummy_output.append(bt.Tensor.serialize(grad))
 
-        # return synapse.dummy_output
         return synapse
         # END TODO
 
 
     # Step 5: Build and link miner functions to the axon.
     # The axon handles request processing, allowing validators to send this process requests.
-    # TODO : ADD
     # Added the port configuration to use multiple miners.
     axon = bt.axon( wallet = wallet, port = config.axon.port ) # origin : axon = bt.axon( wallet = wallet )
     bt.logging.info(f"Axon {axon}")
