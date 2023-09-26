@@ -19,9 +19,6 @@
 
 import typing
 import bittensor as bt
-import torch
-import numpy as np
-import wandb
 
 # This is the protocol for the miner and validator.
 # It is a simple request-response protocol where the validator sends a request
