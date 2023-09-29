@@ -19,46 +19,6 @@ It is a simple request-response protocol where the validator sends a request
 to the miner, and the miner responds with a response.
 """
 
-# class MapReduce(bt.Synapse):
-#     """
-#     MapReduce class inherits from bittensor.Synapse.
-#     It defines the protocol for the miner and validator.
-#     """
-#
-#     # TODO: Add type checking for mr_input
-#     mr_input: typing.List[bt.Tensor]  # Required request input, filled by sending dendrite caller.
-#
-#     # TODO: Add type checking for reliance_score
-#     reliance_score: typing.List[float]  # Reward score assessed by the validator, filled by sending dendrite caller.
-#
-#     # TODO: Add type checking for input_segs
-#     input_segs: list  # Batch segmentation
-#
-#     # TODO: Add type checking for update_model
-#     update_model: bool  # Model update flag. If True, each miner should reload the model updated by the validator first.
-#
-#     # TODO: Add type checking for model_path
-#     model_path: str  # Model path for the miner. Validator stores the model to this path and let the miner know it.
-#
-#     # TODO: Add type checking for mr_output
-#     mr_output: typing.Optional[typing.List[bt.Tensor]] = None  # Optional request output, filled by receiving axon.
-#
-#     class Config:
-#         """
-#         Config class for MapReduce.
-#         It allows arbitrary types.
-#         """
-#         arbitrary_types_allowed=True
-#
-#     def deserialize(self) -> bt.Synapse:
-#         """
-#         Deserialize responses.
-#         Returns:
-#             bt.Synapse: The deserialized response.
-#         """
-#         # TODO: Add error handling for deserialization
-#         return self.mr_output
-
 class MapReduce( bt.Synapse ):
     input_data: typing.List[bt.Tensor]  # Required request input data, filled by sending dendrite caller.
 
