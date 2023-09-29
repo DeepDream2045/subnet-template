@@ -1,9 +1,7 @@
 # The MIT License (MIT)
-# Copyright © 2023 Yuma Rao
-# TODO(developer): Set your name
-# Copyright © 2023 <your name>
+# Copyright © 2023 Daniel Leon
 
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# This license grants permission, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the “Software”), to deal in the Software without restriction, including without limitation
 # the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
 # and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -18,7 +16,7 @@
 # DEALINGS IN THE SOFTWARE.
 
 # Bittensor Miner Template:
-# TODO(developer): Rewrite based on protocol and validator defintion.
+# TODO(developer): Rewrite based on protocol and validator definition.
 
 # Step 1: Import necessary libraries and modules
 import os
@@ -26,20 +24,17 @@ import time
 import argparse
 import traceback
 import bittensor as bt
-from typing import Tuple
+import typing
 import torch
 import pickle
-
-# import this repo
-import template
+import map_reduce
+from neurons.gradient_compute import compute_grads
 
 def get_config():
     # Step 2: Set up the configuration parser
     # This function initializes the necessary command-line arguments.
     # Using command-line arguments allows users to customize various miner settings.
     parser = argparse.ArgumentParser()
-    # TODO(developer): Adds your custom miner arguments to the parser.
-    parser.add_argument('--custom', default='my_custom_value', help='Adds a custom value to the parser.')
     # Adds override arguments for network and netuid.
     parser.add_argument( '--netuid', type = int, default = 1, help = "The chain subnet uid." )
     # Adds subtensor specific arguments i.e. --subtensor.chain_endpoint ... --subtensor.network ...
@@ -107,54 +102,80 @@ def main( config ):
     # Step 4: Set up miner functionalities
     # The following functions control the miner's response to incoming requests.
     # The blacklist function decides if a request should be ignored.
-    def blacklist_fn(synapse: template.protocol.MapReduce) -> Tuple[bool, str]:
-        # Define how miners should blacklist requests. This Function runs before the synapse data has been
-        # deserialized (i.e. before synapse.data is available).
-        # The synapse is instead contructed via the headers of the request. It is important to blacklist
-        # requests before they are deserialized to avoid wasting resources on requests that will be ignored.
+    def blacklist_fn(synapse: map_reduce.protocol.MapReduce) -> typing.Tuple[bool, str]:
+        """
+        This function defines how miners should blacklist requests. It runs before the synapse data has been
+        deserialized (i.e., before synapse.data is available). The synapse is constructed via the headers of the request.
+        It is important to blacklist requests before they are deserialized to avoid wasting resources on requests that will be ignored.
 
-        # Check if the hotkey is a registered entity in the metagraph.
+        Args:
+            synapse (map_reduce.protocol.MapReduce): The synapse object containing the request data.
+
+        Returns:
+            typing.Tuple[bool, str]: A tuple containing a boolean indicating whether to blacklist the request and a string message explaining the decision.
+        """
+
+        # Check if the hotkey is a registered entity in the metagraph
         if synapse.dendrite.hotkey not in metagraph.hotkeys:
             # Ignore requests from unrecognized entities.
             bt.logging.trace(f'Blacklisting unrecognized hotkey {synapse.dendrite.hotkey}')
             return(True, f"Unrecognized hotkey {synapse.dendrite.hotkey}")
 
-        # # Check the validator permission
-        # caller_uid = metagraph.hotkeys.index( synapse.dendrite.hotkey ) # Get the caller index.
-        # if not metagraph.validator_permit[caller_uid]:
-        #     bt.logging.trace(f'Blacklisting invalid validator {synapse.dendrite.hotkey}')
-        #     return(True, f"No validation permission {synapse.dendrite.hotkey}")
+        # Check if the validator has a permission to validate
+        caller_uid = metagraph.hotkeys.index( synapse.dendrite.hotkey ) # Get the caller index.
+        if not metagraph.validator_permit[caller_uid]:
+            bt.logging.trace(f'Blacklisting invalid validator {synapse.dendrite.hotkey}')
+            return(True, f"No validation permission {synapse.dendrite.hotkey}")
 
         # Check if the validator has enough stakes
         caller_uid = metagraph.hotkeys.index( synapse.dendrite.hotkey ) # Get the caller index.
-        stake = float( metagraph.S[ caller_uid ] * synapse.reliance_score[caller_uid]) # Return the stake as the priority.
+        stake = float( metagraph.S[ caller_uid ] * synapse.reli_scores[caller_uid]) # Return the stake as the priority.
         if stake == 0.0:
             # Ignore requests from validators with empty wallet
             bt.logging.trace(f'Blacklisting empty wallet {synapse.dendrite.hotkey}')
             return(True, f"Empty wallet validator {synapse.dendrite.hotkey}")
 
+        # TODO: Add additional checks here if necessary
+
         bt.logging.trace(f'Not Blacklisting recognized hotkey {synapse.dendrite.hotkey}')
         return(False, f"Valid validator {synapse.dendrite.hotkey}")
 
-    # The priority function determines the order in which requests are handled.
-    # More valuable or higher-priority requests are processed before others.
-    def priority_fn(synapse: template.protocol.MapReduce) -> float:
-        # Define how miners should prioritize requests.
-        # Miners may recieve messages from multiple entities at once. This function
-        # determines which request should be processed first. Higher values indicate
-        # that the request should be processed first. Lower values indicate that the
-        # request should be processed later.
-        # Below: simple logic, prioritize requests from entities with more stake.
-        caller_uid = metagraph.hotkeys.index( synapse.dendrite.hotkey ) # Get the caller index.
-        priority = float( metagraph.S[ caller_uid ] * synapse.reliance_score[caller_uid]) # Return the stake as the priority.
+    def priority_fn(synapse: map_reduce.protocol.MapReduce) -> float:
+        """
+        This function defines how miners should prioritize requests. It runs after the blacklist function has been called.
+        Miners may receive messages from multiple entities at once. This function determines which request should be processed first.
+        Higher values indicate that the request should be processed first. Lower values indicate that the request should be processed later.
+        
+        Args:
+            synapse (map_reduce.protocol.MapReduce): The synapse object containing the request data.
+        
+        Returns:
+            float: The priority score of the request. Higher values indicate higher priority.
+        """
+        # Get the caller index.
+        caller_uid = metagraph.hotkeys.index(synapse.dendrite.hotkey)
+        
+        # Calculate the priority score based on the stake and reliance score of the caller.
+        # Higher stake and reliance score leads to higher priority.
+        priority = float(metagraph.S[caller_uid] * synapse.reli_scores[caller_uid])
+        
         bt.logging.trace(f'Prioritizing {synapse.dendrite.hotkey} with value: ', priority)
+        
         return priority
 
     # This is the core miner function, which decides the miner's response to a valid, high-priority request.
-    def map_reduce(synapse: template.protocol.MapReduce) -> template.protocol.MapReduce:
-        # Define how miners should process requests.
-        # This function runs after the synapse has been deserialized (i.e. after synapse.data is available).
-        # This function runs after the blacklist and priority functions have been called.
+    def compute_gradient(synapse: map_reduce.protocol.MapReduce) -> map_reduce.protocol.MapReduce:
+        """
+        This function defines how miners should process requests. It runs after the synapse has been deserialized 
+        (i.e., after synapse.data is available) and after the blacklist and priority functions have been called.
+        
+        Args:
+            synapse (map_reduce.protocol.MapReduce): The synapse object containing the request data.
+        
+        Returns:
+            map_reduce.protocol.MapReduce: The synapse object with the calculated gradients.
+        """
+
 
         # Check if miner should update the model and update it.
         if synapse.update_model:
@@ -164,33 +185,41 @@ def main( config ):
         # Check if model exists
         try:
             model
-        except:
-            with open(synapse.model_path, 'rb') as f:
-                model = pickle.load(f)
+        except NameError:
+            try:
+                with open(synapse.model_path, 'rb') as f:
+                    model = pickle.load(f)
+            except:
+                synapse.gradients = None
+                bt.logging.info("Model does not exist or is corrupted")
+                return synapse
 
-        # Get corresponding data using input_segs
-        input, target = synapse.mr_input
-        input = bt.Tensor.deserialize(input)
-        input = input[synapse.input_segs[my_subnet_uid]:synapse.input_segs[my_subnet_uid+1]]
-        target = bt.Tensor.deserialize(target)
-        target = target[synapse.input_segs[my_subnet_uid]:synapse.input_segs[my_subnet_uid + 1]]
+        # Get map reduced data using input_segs
+        try:
+            input, target = synapse.input_data
+            input = bt.Tensor.deserialize(input)
+            input = input[synapse.input_segs[my_subnet_uid]:synapse.input_segs[my_subnet_uid+1]]
+            target = bt.Tensor.deserialize(target)
+            target = target[synapse.input_segs[my_subnet_uid]:synapse.input_segs[my_subnet_uid + 1]]
+        except:
+            bt.logging.info(f"Incorrect input data type")
+            synapse.gradients = None
+            return synapse
 
         # Calculate the loss and gradients
-        softmax = torch.nn.Softmax(dim=1)
-        output = softmax(model(input)['logits'])
-        xentr_loss = torch.nn.CrossEntropyLoss()
-        loss = xentr_loss(output, target)
-        loss.backward()
-        grads = [param.grad for param in model.parameters()]
+        loss, grads = compute_grads(model, input, target, synapse.loss_fn)
+        if grads == None:
+            synapse.gradients = None
+            return synapse
+
         bt.logging.info(f"Loss : {loss}")
 
         # Return gradients
-        synapse.mr_output = []
+        synapse.gradients = []
         for grad in grads:
-            synapse.mr_output.append(bt.Tensor.serialize(grad))
+            synapse.gradients.append(bt.Tensor.serialize(grad))
 
         return synapse
-        # END TODO
 
 
     # Step 5: Build and link miner functions to the axon.
@@ -202,7 +231,7 @@ def main( config ):
     # Attach determiners which functions are called when servicing a request.
     bt.logging.info(f"Attaching forward function to axon.")
     axon.attach(
-        forward_fn = map_reduce,
+        forward_fn = compute_gradient,
         blacklist_fn = blacklist_fn,
         priority_fn = priority_fn,
     )
@@ -222,7 +251,6 @@ def main( config ):
     step = 0
     while True:
         try:
-            # TODO(developer): Define any additional operations to be performed by the miner.
             # Below: Periodically update our knowledge of the network graph.
             if step % 5 == 0:
                 metagraph = subtensor.metagraph(config.netuid)

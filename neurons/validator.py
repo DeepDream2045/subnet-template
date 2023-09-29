@@ -1,7 +1,5 @@
 # The MIT License (MIT)
-# Copyright © 2023 Yuma Rao
-# TODO(developer): Set your name
-# Copyright © 2023 <your name>
+# Copyright © 2023 Daniel Leon
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the “Software”), to deal in the Software without restriction, including without limitation
@@ -26,21 +24,29 @@ import torch
 import argparse
 import traceback
 import bittensor as bt
-import datasets as datasets
 import pickle
-from transformers import ResNetModel, ResNetConfig, ResNetForImageClassification, ConvNextFeatureExtractor
 
-import template
+from map_reduce.protocol import MapReduce
+from neurons.gradient_compute import average_gradient, update_scores
+from neurons.dataset import dataloader, reduce_map
+from neurons.model import *
+from neurons.preprocess import prep_data
 
 # Step 2: Set up the configuration parser
 # This function is responsible for setting up and parsing command-line arguments.
 def get_config():
 
     parser = argparse.ArgumentParser()
-    # TODO(developer): Adds your custom validator arguments to the parser.
-    parser.add_argument('--custom', default='my_custom_value', help='Adds a custom value to the parser.')
     # Adds override arguments for network and netuid.
     parser.add_argument( '--netuid', type = int, default = 1, help = "The chain subnet uid." )
+    # Adds arguments for model name.
+    # parser.add_argument( '--model_name', type = str, help = "Huggingface pretrained model name to train." )
+    # Adds arguments for dataset name.
+    parser.add_argument( '--dataset', type = str, help = "Huggingface dataset to train the model on." )
+    # Adds arguments for name of loss function.
+    parser.add_argument( '--loss_fn', type = str, help = "Loss function to use during training." )
+    # Adds arguments for batch size.
+    parser.add_argument( '--batch_size', type = int, default = 32, help = "The chain subnet uid." )
     # Adds subtensor specific arguments i.e. --subtensor.chain_endpoint ... --subtensor.network ...
     bt.subtensor.add_args(parser)
     # Adds logging specific arguments i.e. --logging.debug ..., --logging.trace .. or --logging.logging_dir ...
@@ -111,14 +117,14 @@ def main( config ):
     alpha = 0.9
 
     # Define two scores; reliance_scores and capacity_scores
-    # The reliance_scores shows how correctly each miner is computing.
-    # The capacity_scores shows how much data each miner can handle at the same time.
-    # The reliance_score of validators and other miners who return None will gradually converge to 0.
-    reliance_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
+    # The reliance_scores represents how correctly each miner is computing
+    # The capacity_scores represents how much data each miner can handle at the same time
+    # The reliance_score of validators and other  who return None or malicious response will gradually converge to 0
+    reli_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
     capacity_scores = torch.ones_like(metagraph.S, dtype=torch.float32)
     capacity_scores = capacity_scores / torch.sum(capacity_scores)
 
-    bt.logging.info(f"Reliance weights of miners: {reliance_scores}")
+    bt.logging.info(f"Reliance weights of miners: {reli_scores}")
 
     # Step 7: The Main Validation Loop
     bt.logging.info("Starting validator loop.")
@@ -127,155 +133,78 @@ def main( config ):
     # Define the interval of model updates for miners
     update_step = 2
 
-    # Define the cifar-10 dataloader for training dataset
-    train_kwargs = {'batch_size': len(metagraph.S) * 256, 'shuffle': True}
-    cifar_dataset = datasets.load_dataset("cifar10", split='train[:]').with_format('torch')
-    cifar_dataloader = torch.utils.data.DataLoader(cifar_dataset, **train_kwargs)
+    # Define the training dataset dataloader
+    try:
+        train_dataloader = dataloader(config.dataset, config.batch_size, True)
+    except:
+        bt.logging.info("Unable to load the dataset. Choose another one.")
+        return
 
-    # Define the image preprocessor
-    img_processor = ConvNextFeatureExtractor(size=32,
-                                             image_mean=[0.485, 0.456, 0.406],
-                                             image_std=[0.229, 0.224, 0.225])
+    # Define the dataset preprocessor
+    preprocessor = build_processor()
 
-    # Define the resnet18 model and model checkpoint path.
-    resnet_config = ResNetConfig(
-        num_channels=3,
-        embedding_size=64,
-        hidden_sizes=[64, 128, 256, 512],
-        depths=[2, 2, 2, 2],
-        layer_type='basic',
-        hidden_act='relu',
-        downsample_in_first_stage=False,
-        out_features=['stage4'],
-        out_indices=[4],
-        num_labels=10,
-        label2id={'airplane': 0, 'automobile': 1, 'bird': 2, 'cat': 3, 'deer': 4, 'dog': 5, 'frog': 6, 'horse': 7, 'ship': 8, 'truck': 9},
-        id2label={0: 'airplane', 1: 'automobile', 2: 'bird', 3: 'cat', 4: 'deer', 5: 'dog', 6: 'frog', 7: 'horse', 8: 'ship', 9: 'truck'}
-    )
-    model = ResNetForImageClassification(resnet_config)
-    optimizer = torch.optim.Adadelta(model.parameters(), lr=0.01)
+    # # Define the resnet18 model and optimizer.
+    model = build_model()
+    optimizer = build_optimizer(model, lr=0.1)
 
+    # Dump the model to the local storage
     model_dump_path = '/home/ubuntu/subnet-template/model.pkl'
     with open(model_dump_path, 'wb') as f:
         pickle.dump(model, f)
 
     while True:
         try:
-            # Broadcast a query to all miners on the network.
-
-            # Check if miner model should be updated.
+            # Broadcast a query to all miners on the network
+            # Set the model_update_flag to True at every update_step
             if step % update_step == 0:
-                mr_update_flag = True
+                model_update_flag = True
                 with open(model_dump_path, 'wb') as f:
                     pickle.dump(model, f)
             else:
-                mr_update_flag = False
+                model_update_flag = False
 
-            # Set input data to each axon and get responses
-            # The whole batch and corresponding segments are parsed in order to send requests simultaneously.
-            data = next(iter(cifar_dataloader))
-            images = data['img']
-            labels = data['label']
-            images = img_processor(images, return_tensors='pt')['pixel_values']
+            # Preprocess input data
+            data = next(iter(train_dataloader))
+            imgs, labels = prep_data(data, preprocessor)
 
-            # Set the segmentation according to capacity_scores
-            data_len = images.shape[0]
-            data_segs = [0]
-            total_capa_score = sum(capacity_scores)
-            for capa_score in capacity_scores:
-                data_segs.append(min(int(data_len * capa_score / total_capa_score) + data_segs[-1], data_len))
+            # Segment the data according to capacity_scores
+            if len(capacity_scores) == 0:
+                bt.logging.info(f"No valid miner available")
+                continue
+            data_segs = reduce_map(labels, capacity_scores)
 
             # Send requests to synapses
-            rel_scores_ = list(bt.Tensor.serialize(reliance_scores).numpy())
+            # The entire batch and corresponding segments are parsed to send requests simultaneously.
+            reli_scores_list = list(bt.Tensor.serialize(reli_scores).numpy()) # ISSUE
             responses = dendrite.query(
                 metagraph.axons,
-                template.protocol.MapReduce(
-                    mr_input = [bt.Tensor.serialize(images),
+                MapReduce(
+                    input_data = [bt.Tensor.serialize(imgs),
                                    bt.Tensor.serialize(labels)],
-                    reliance_score = rel_scores_,
+                    reli_scores = reli_scores_list,
                     input_segs = data_segs,
-                    update_model = mr_update_flag,
+                    loss_fn = config.loss_fn,
+                    update_model = model_update_flag,
                     model_path = model_dump_path),
-                deserialize = True
-
+                    deserialize = True
             )
 
-            # Get the gradients and turn them from bittensor Tensor to torch Tensor
-            for i, response in enumerate(responses):
-                if response!=None:
-                    for j, grad in enumerate(response):
-                        response[j] = grad.deserialize()
-                    responses[i]=response
+            # Calculate the average gradient using responses from miners
+            avg_grad = average_gradient(responses, reli_scores)
 
-            bt.logging.info(f"Received miner responses")
-
-            # Calculate the center of the gradients using reliance scores.
-            center = []
-            total_score = 1e-10
-            grad_dim = 0
-            # Get the length of the grads
-            for i, resp_i in enumerate(responses):
-                if resp_i != None:
-                    grad_dim = len(resp_i)
-                    break
-
-            # Calculate the center of gradients in case at least one synapse is responding
-            if grad_dim > 0:
-                # Make the list of grads
-                grads_list = []
-                valid_grads_ids = []
-                for i, resp_i in enumerate(responses):
-                    if resp_i != None:
-                        valid_grads_ids.append(i)
-                        grads_list.append(resp_i)
-
-                # Calculate the center of the gradients
-                for i in range(grad_dim): center.append(torch.Tensor())
-                for i, grads in enumerate(grads_list):
-                    for j, grad in enumerate(grads):
-                        center[j] = torch.cat((center[j], grad.unsqueeze(0) * reliance_scores[i]), 0)
-                    total_score += reliance_scores[i]
-
-                for j in range(grad_dim):
-                    center[j] = torch.sum(center[j], dim=0) / total_score
-
-                # Apply backpropagation using center of gradients
+            # Update the model parameter using average gradient
+            if avg_grad != None:
                 for j, param in enumerate(model.parameters()):
-                    param.grad = center[j]
+                    param.grad = avg_grad[j]
                 optimizer.step()
 
-                # Calculate the distance between each response and the center
-                distances = []
-                for i, grads in enumerate(grads_list):
-                    distances.append([])
-                    for j in range(grad_dim):
-                        distances[-1].append(torch.max(torch.norm(center[j] - grads[j]), torch.tensor(1e-10)))
-
-                # Normalize the distances
-                distances = torch.tensor(distances)
-                for i in range(grad_dim):
-                    distances[:, i] = distances[:, i] / torch.max(distances[:, i])
-
-                # Calculate the reliance score of each response according to the distance to the center.
-                for i, resp_i in enumerate(responses):
-                    if resp_i==None:
-                        score=0
-                    else:
-                        dist = torch.max(distances[:, valid_grads_ids.index(i)])
-
-                        score = 1 - dist / 2
-                    reliance_scores[i] = alpha * reliance_scores[i] + (1 - alpha) * score
-
-            # Normalize the reliance_scores to avoid the shrink of reliance_scores.
-            reliance_scores = reliance_scores / torch.max(reliance_scores)
-            capacity_scores =  torch.mul(capacity_scores, reliance_scores)
-            capacity_scores = capacity_scores / torch.sum(capacity_scores)
-            bt.logging.info(f"Reliance scores: {reliance_scores}")
-            # END ADD
+                # Update the reliance score
+                reli_scores = update_scores(responses, avg_grad, reli_scores)
+                bt.logging.info(f"Reliance weights of miners: {reli_scores}")
 
             # Periodically update the weights on the Bittensor blockchain.
             if (step + 1) % 20 == 0:
-                weights = torch.nn.functional.normalize(reliance_scores, p=1.0, dim=0)
+                weights = torch.nn.functional.normalize(reli_scores, p=1.0, dim=0)
                 bt.logging.info(f"Setting weights: {weights}")
                 # This is a crucial step that updates the incentive mechanism on the Bittensor blockchain.
                 # Miners with higher scores (or weights) receive a larger share of TAO rewards on this subnet.
@@ -294,7 +223,7 @@ def main( config ):
             # Resync our local state with the latest state from the blockchain.
             metagraph = subtensor.metagraph(config.netuid)
             # Sleep for a duration equivalent to the block time (i.e., time between successive blocks).
-            time.sleep(bt.__blocktime__)
+            # time.sleep(bt.__blocktime__)
 
         # If we encounter an unexpected error, log it for debugging.
         except RuntimeError as e:

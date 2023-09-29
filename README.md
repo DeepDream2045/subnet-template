@@ -1,34 +1,55 @@
 
 <div align="center">
 
-# **Subnet Template** <!-- omit in toc -->
+# **Bittensor Map Reduce** <!-- omit in toc -->
+[![Discord Chat](https://img.shields.io/discord/308323056592486420.svg)](https://discord.gg/bittensor)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) 
 
 ---
 
 ### The Incentivized Internet <!-- omit in toc -->
 
-</div>
-
----
-
-This template contains all the necessary files and functions to define subnet incentive mechanisms. You can run this template in three ways,
-on main-network (real TOKEN, to be released), Test-network (fake TOKEN), or with your own staging-network. This repo includes instructions for doing all three.
-
-# Introduction
-The blockchain hosts multiple self-contained incentive mechanisms 'subnets'. Subnets are playing fields through which miners (those producing value) and validators (those producing consensus) determine together the proper distribution of TOKEN for the purpose of incentivizing the creation of value, i.e. generating digital commodities, such as intelligence, or data. Each consists of a wire protocol through which miners and validators interact and their method of interacting with chain consensus engine [Yuma Consensus](https://com/documentation/validating/yuma-consensus) which is designed to drive these actors into agreement about who is creating value.
-
-This repository is a template for writing such mechanisms, preloaded with all needed files to run a very simple mechanism. The template is designed to be simple (rewards miners for responding with the multiple of the value sent by vaidators) and can act as a starting point for those who want to write their own mechanism. It is split into 3 primary files which you should rewrite. 
-These files are:
-- `template/protocol.py`: The file where the wire-protocol used by miners and validators is defined.
-- `neurons/miner.py`: This script which defines the miner's behavior, i.e., how the miner responds to requests from validators.
-- `neurons/validator.py`: This script which defines the validator's behavior, i.e., how the validator requests information from miners and determines scores.
+[Discord](https://discord.gg/bittensor) • [Network](https://taostats.io/) • [Research](https://bittensor.com/whitepaper)
 
 </div>
 
 ---
+
+A broadcast subnet leverages the bandwidth of multiple peers to transfer large data from point to A to multiple point Bs without needing to leverage large quantities of your own upload. The concept is simple, a large file D can be split into multiple chunks and sent to N intermediate peers (usually with redundancy) and then forwarded onward to B additional endpoints in an N by B full bipartite fashion. The inverse operation is also valuable, where data DxB large data files can be aggregated from B peers by leveraging the bandwidth of N intermediaries. 
+
+In the forward 'map' operation a file D is broken into chunks and split across the N peers each of whom then forwards their chunk to B endpoints allowing each downloading peer to recieve the full file of size D with the sending peer needing an upload of only size D. The backward operation, 'reduce', acts in reverse, the K receiving peers fan out their response data D in chunks to the N intermediary peers who then aggregate the chunks from each other and finally send the sum of total chunks back to the sending peer A. 
+
+The map-reduce cycle is essential for reducing the bandwidth by a factor of K on the running peers which is essential for the training of machine learning models in a distributed setting. This template is a protoype for incentivizing the speed at which this operation can take place by validating both the consistency and operation speed of a map-reduce.    
+
+---
+# Data Flow
+
+![Dataflow Diagram](dataflow.png)
+
+- Map the training data:
+Validators broadcast a request for gradient computation to Miners. Validators determine training dataset for each miner based on their capacity of computational resources.
+
+- Data Processing & Response:
+Miners process the request by training given data on datasets on the storage subnet.
+Miners then send their computed gradients back to the Validators.
+
+- Reduce the gradients:
+Validators receive gradients from Miners and begin the verification process.
+False gradients or attacks are identified and handled by reducing points of the miners.
+The average gradient, as computed by the validator, is a weighted sum of the gradients submitted by the miners. Each miner’s gradient is multiplied by a corresponding weight, or point, assigned to that miner. 
+The sum of all miner points equals 1.
+
+avg.gradient = sum(gradient[i] * point[i])
+
+- Update the model:
+Validators update the model with the average gradient.
+
+
+![Map All Reduce Diagram](allreduce.png)
 
 # Running the template
-Before running the template you will need to attain a subnetwork on either main network, test network, or your own staging network. To create subnetworks on each of these subnets follow the instructions in files below:
+Before running the template you will need to attain a subnetwork on either Bittensor's main network, test network, or your own staging network. To create subnetworks on each of these subnets follow the instructions in files below:
+
 - `docs/running_on_staging.md`
 - `docs/running_on_testnet.md`
 - `docs/running_on_mainnet.md`
@@ -40,7 +61,8 @@ Before running the template you will need to attain a subnetwork on either main 
 # Installation
 This repository requires python3.8 or higher. To install, simply clone this repository and install the requirements.
 ```bash
-cd subnet-template
+git clone https://github.com/unconst/map-reduce-subnet.git
+cd map-reduce-subnet
 python -m pip install -r requirements.txt
 python -m pip install -e .
 ```
@@ -55,16 +77,16 @@ Once you have installed this repo and attained your subnet via the instructions 
 python -m neurons/miner.py 
     --netuid <your netuid>  # Must be attained by following the instructions in the docs/running_on_*.md files
     --subtensor.chain_endpoint <your chain url>  # Must be attained by following the instructions in the docs/running_on_*.md files
-    --wallet.name <your miner wallet> # Must be created using the cli
-    --wallet.hotkey <your validator hotkey> # Must be created using the cli
+    --wallet.name <your miner wallet> # Must be created using the bittensor-cli
+    --wallet.hotkey <your validator hotkey> # Must be created using the bittensor-cli
     --logging.debug # Run in debug mode, alternatively --logging.trace for trace mode
 
 # To run the validator
 python -m neurons/validator.py 
     --netuid <your netuid> # Must be attained by following the instructions in the docs/running_on_*.md files
     --subtensor.chain_endpoint <your chain url> # Must be attained by following the instructions in the docs/running_on_*.md files
-    --wallet.name <your validator wallet>  # Must be created using the cli
-    --wallet.hotkey <your validator hotkey> # Must be created using the cli
+    --wallet.name <your validator wallet>  # Must be created using the bittensor-cli
+    --wallet.hotkey <your validator hotkey> # Must be created using the bittensor-cli
     --logging.debug # Run in debug mode, alternatively --logging.trace for trace mode
 ```
 
